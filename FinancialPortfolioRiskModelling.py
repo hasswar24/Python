@@ -177,9 +177,9 @@ equal_port_return = sum(all_returns[f'Percentage_{s}_return']*w for s, w in zip(
 
 equal_cum_return=[] #creating an array for the cumulative return when equal weights are used
 pound=1
-for r in equal_port_return:
+for r in equal_port_return: #creating a for loop to calculate the portfolio return when using an equal weight for stocks
     pound=pound*(1+r/100)
-    equal_cum_return.append(pound)
+    equal_cum_return.append(pound) #Again adding the value of the pound into the equal cumulative return array 
 
 plt.figure(figsize=(10, 6))
 plt.plot(all_returns['Date'], optimised_cum_return, label='Optimized Portfolio')
