@@ -21,7 +21,6 @@ print(check)
 #Now want to calculate monthly percentage change in closing prices to then allow for calculations of potential return
 all_returns = pandas.DataFrame() #Useful later on when performing optimisation. Will help store stock and its equivalent return
 
-
 for s in stocks: # for loop based on stocks initially chosen.
     stockclose = f'Close_{s}' #defining variable s and stockclose
     mp_query = f'''
@@ -38,17 +37,19 @@ for s in stocks: # for loop based on stocks initially chosen.
             pound = pound*(1+r/100) 
             cum_return.append(pound)   #Adding new value to the list using append()     
 
-    plt.plot(monthly_returns["Date"] , cum_return, label = s) #plotting date against the cumulate return
+    years = pandas.to_datetime(monthly_returns['Date']).dt.year #Have a look at later
+
+    plt.plot(years , cum_return, label = s) #plotting date against the cumulate return
     plt.legend()
 
     #Now want to produce risk metrics 
     #Volatility, Sharpe ratio and Value at Risk - All metrics that can help deciding whether investment into stock is suitable
-    monthly_vol = monthly_returns[f'Percentage_{s}_return'].std()
+    monthly_vol = monthly_returns[f'Percentage_{s}_return'].std() 
     annual_vol = monthly_vol* np.sqrt(12)  #convert by multiplying monthly volatility with square root of 12    
     av_ret = monthly_returns[f"Percentage_{s}_return"].mean() / 100   
-    rfr = 0.0391 / 12 #
+    rfr = 0.03977 / 12 #UKs 3 month bill yield. Dividing by 12 to convert to convert into a monthly rate
     sharpe = (av_ret -rfr)  /(monthly_vol/100)#Calculating the sharpe ratio
-    VaR = np.percentile(monthly_returns[f"Percentage_{s}_return"] , 5)
+    VaR = np.percentile(monthly_returns[f"Percentage_{s}_return"] , 5) 
 
     Metrics = pandas.DataFrame({
          'Stock name' : [s] ,
@@ -57,12 +58,13 @@ for s in stocks: # for loop based on stocks initially chosen.
          'Sharpe ratio' : [sharpe] ,
          'Value at risk' : [VaR]
     })
+
     print(Metrics) #Producing table of calculated parameters
     
     if all_returns.empty: #Using an if loop to fill the all_returns variable. 
         all_returns= monthly_returns
     else:
-         all_returns = all_returns.merge(monthly_returns, on = 'Date')
+         all_returns = all_returns.merge(monthly_returns, on = 'Date') #If not empty, replace data based on date. Ensures data replaced from exact same point
 
 con.close()
 
@@ -76,11 +78,11 @@ plt.title("A plot of Return per pound against date")
 #Need sharpe ratio for determined stock proportions
 
 cov_mtx = all_returns.drop(columns = 'Date') . cov()    #First have to determine covariance matrix. This determines the strength of relationships between stocks  
-print(cov_mtx)
+print(cov_mtx) #Checking matrix value
 
 #Now want mean return per stock
 return_columns = [f'Percentage_{s}_return' for s in stocks] #storing returns for each stocks as an array using a nested for loop. 
-mean_stock_return = all_returns[return_columns].mean()
+mean_stock_return = all_returns[return_columns].mean() #Calculating the mean of return for each value
 print(mean_stock_return)
 
 #Now using the covariance matrix and the mean, have to determine whether the performance of the new stock portfolio using corresponding values from the 
@@ -92,10 +94,10 @@ def port_performance(weights,mean_stock_return, cov_mtx,rfr): #Defining the func
      return portfolio_return, portfolio_vol,sharpe #Stores metrics
 
 def negative_sharpe(weights, mean_stock_return, cov_mtx, rfr):  #defined a function to return a negative sharpe value
-    portfolio_return,portfolio_vol,sharpe = port_performance(weights, mean_stock_return,cov_mtx,rfr)
-    return -sharpe 
+    portfolio_return,portfolio_vol,sharpe = port_performance(weights, mean_stock_return,cov_mtx,rfr) 
+    return -sharpe #Returning the value of the negative sharpe variable
 
-def portfolio_volatility(weights, mean_stock_return, cov_mtx):
+def portfolio_volatility(weights, mean_stock_return, cov_mtx): 
     return np.sqrt(np.dot(weights, np.dot(cov_mtx, weights)))
                                                                             
 num_stocks = len(stocks) #States how many stocks are within the stock list
@@ -107,7 +109,7 @@ bound = tuple((0,1) for _ in range(num_stocks)) # creating a bound for each stoc
 #now want an initial guess for the weightings of each
 #want a list of equal weightings. So 1/(number of stocks)
 
-first_guess = num_stocks*[1./num_stocks] #Creating a variable for my first guess. 
+first_guess = num_stocks*[1./num_stocks] #Creating a variable for first guess. Producing an equal weights. 
 
 result = minimize(negative_sharpe, first_guess, args=(mean_stock_return,cov_mtx,rfr), method ='SLSQP', bounds = bound, constraints=constraint)
 optimal_weights=result.x
@@ -118,16 +120,17 @@ opt_table = pandas.DataFrame({ #Produce a table of the optimal weights for each 
 })
 print(opt_table)
 
-target_returns = np.linspace(mean_stock_return.min(), mean_stock_return.max(), 50)
-frontier_volatility = []
+target_returns = np.linspace(mean_stock_return.min(), mean_stock_return.max(), 50) #Create 50 evenly spaced numbers between the minimum and maximum values of the mean stock return
+frontier_volatility = [] #creating list for the frontier
 
-for target in target_returns:
+for target in target_returns: #for loop based on target_returns
     constraints = (
-        {'type': 'eq', 'fun': lambda w: np.sum(w) - 1},
-        {'type': 'eq', 'fun': lambda w, target=target: np.sum(w * mean_stock_return) - target}
+        {'type': 'eq', 'fun': lambda w: np.sum(w) - 1}, #First constraint. All weights must equate to 1
+        {'type': 'eq', 'fun': lambda w, target=target: np.sum(w * mean_stock_return) - target} #Second constraint. Expected return = Target considered
     )
     result = minimize(portfolio_volatility, first_guess, args=(mean_stock_return, cov_mtx),
-                       method='SLSQP', bounds=bound, constraints=constraints)
+                       method='SLSQP', bounds=bound, constraints=constraints) #Now aiming to minimise the volatility
+    #using optimisation method of SLSQP
     frontier_volatility.append(result.fun)
 
 # 3. Plot the frontier, plus your optimal and equal-weighted portfolios
@@ -135,24 +138,28 @@ plt.figure(figsize=(10, 6))
 plt.plot(frontier_volatility, target_returns, label='Efficient Frontier')
 
 opt_return, opt_vol, opt_sharpe = port_performance(optimal_weights, mean_stock_return, cov_mtx, rfr)
-plt.scatter(opt_vol, opt_return, color='red', marker='*', s=200, label='Max Sharpe Portfolio')
+plt.scatter(opt_vol, opt_return, color='red', marker='*', s=200, label='Max Sharpe Portfolio') 
 
-equal_weights = np.array(num_stocks * [1. / num_stocks])
+equal_weights = np.array(num_stocks * [1. / num_stocks]) #Equal weighting array created using NumPy
 eq_return, eq_vol, eq_sharpe = port_performance(equal_weights, mean_stock_return, cov_mtx, rfr)
-plt.scatter(eq_vol, eq_return, color='blue', marker='o', s=100, label='Equal-Weighted Portfolio')
+plt.scatter(eq_vol, eq_return, color='blue', marker='o', s=100, label='Equal-Weighted Portfolio') #Producing a point of 
 
-plt.xlabel('Volatility (Risk)')
+plt.xlabel('Volatility (Risk)') #Labelling x and y axis.
 plt.ylabel('Expected Return')
-plt.title('Efficient Frontier')
+plt.title('Efficient Frontier') #Title added
+plt.legend()
 
-x = all_returns[[f'Percentage_{s}_return' for s in stocks]].shift(1).dropna()
-y=all_returns[f'Percentage_GLD_return'].iloc[1:]
+#Have to create inputs for the machine learning component. Want to predict future returns on GLD using previous stock data
+x = all_returns[[f'Percentage_{s}_return' for s in stocks]].shift(1).dropna() #Now looking to implement ML. Creating the variable x using a for loop. Dropna removes the first row as before, where as shift(1) will move rows down 1.
+y=all_returns[f'Percentage_GLD_return'].iloc[1:] #y is the gold returns column. iloc means y is selecting data from the second row onwards. Trying to determine today's GLD return
 
-x_train,x_test,y_train,y_test = train_test_split(x,y,test_size=0.2 , shuffle=False)
+x_train,x_test,y_train,y_test = train_test_split(x,y,test_size=0.2 , shuffle=False) #Using a train/test split. Splitting into a split of 20% of data used to test and 80% used to train. Shuffle = False ensures chronological order
+
+
 model=RandomForestRegressor() #Using random forest regression model
-model.fit(x_train,y_train) 
+model.fit(x_train,y_train) #Now training the ML model, using input x_train to find output y_train
 
-prediction=model.predict(x_test)
+prediction=model.predict(x_test) #Predicting target values
 mse = mean_squared_error(y_test,prediction)
 r2=r2_score(y_test,prediction)
 
@@ -169,6 +176,7 @@ print(comparison)
 optimised_port_return = sum(all_returns[f'Percentage_{s}_return'] * w for s, w in zip(stocks , optimal_weights))
 optimised_cum_return = [] #create array
 pound=1
+#Same process when calculating return from inital for loop
 for r in optimised_port_return:
     pound=pound*(1+r/100)
     optimised_cum_return.append(pound)
@@ -177,20 +185,22 @@ equal_port_return = sum(all_returns[f'Percentage_{s}_return']*w for s, w in zip(
 
 equal_cum_return=[] #creating an array for the cumulative return when equal weights are used
 pound=1
-for r in equal_port_return: #creating a for loop to calculate the portfolio return when using an equal weight for stocks
-    pound=pound*(1+r/100)
-    equal_cum_return.append(pound) #Again adding the value of the pound into the equal cumulative return array 
+for r in equal_port_return:
+    pound=pound*(1+r/100) 
+    equal_cum_return.append(pound)
 
 plt.figure(figsize=(10, 6))
-plt.plot(all_returns['Date'], optimised_cum_return, label='Optimized Portfolio')
-plt.plot(all_returns['Date'], equal_cum_return, label='Equal-Weighted Portfolio')
+
+
+plt.plot(all_returns['Date'], optimised_cum_return, label='Optimised Portfolio')  #Now plotting returns. Here using the calculated optimised weights
+plt.plot(all_returns['Date'], equal_cum_return, label='Equally-Weighted Portfolio') #Plotting return when equal weightings are applied
 plt.xlabel('Date')
-plt.ylabel('Growth of £1')
-plt.title('Backtest: Optimized vs Equal-Weighted Portfolio')
+plt.ylabel('Return per £')
+plt.title('Backtest: Optimised vs Equal-Weighted Portfolio')
 plt.legend()
 plt.show()
 
-print(f"Optimized portfolio final value: £{optimised_cum_return[-1]:.2f}")
-print(f"Equal-weighted portfolio final value: £{equal_cum_return[-1]:.2f}")
-print(f"Optimized — Return: {opt_return:.2f}%, Volatility: {opt_vol:.2f}%, Sharpe: {opt_sharpe:.2f}")
-print(f"Equal-weighted — Return: {eq_return:.2f}%, Volatility: {eq_vol:.2f}%, Sharpe: {eq_sharpe:.2f}")
+print(f"Optimised portfolio final value: £{optimised_cum_return[-1]:.2f}") #Printing calculated parameters. Outputting to 2 dp
+print(f"Equal-weighted portfolio final value: £{equal_cum_return[-1]:.2f}") 
+print(f"Optimised — Return: {opt_return:.2f}%, Volatility: {opt_vol:.2f}%, Sharpe: {opt_sharpe:.2f}")
+print(f"Equal-weighted — Return: {eq_return:.2f}%, Volatility: {eq_vol:.2f}%, Sharpe: {eq_sharpe:.2f}") 
