@@ -1,207 +1,118 @@
-import pandas #interact with tabular data
-import yfinance as yf #Yahoo's own API
-import sqlite3 #SQL package
-import matplotlib.pyplot as plt #Produce plots of returns by date
-import numpy as np #Mathematical functiokns
-from scipy.optimize import minimize #use for optimisation later on
-from sklearn.model_selection import train_test_split 
-from sklearn.ensemble import RandomForestRegressor 
-from sklearn.metrics import mean_squared_error,r2_score
+# Financial Portfolio Risk Modelling and Optimisation
 
-stocks = ["GLD" , "CL=F" , "TSLA" , "LLOY.L" , "AMZN" , "NG.L" ] #Choices regarding imported stock data. Commodities. Finance and tech industry related stocks.
-stockdata = yf.download(stocks, start = "2020-01-01", interval='1mo') #Downloading stock data from yahoo finance with monthly intervals
-stockdata.columns = ['_'.join(col).strip() for col in stockdata.columns] #Ammending column labels to ensure column is only 1 string rather than seperate
+A Python and SQL pipeline that pulls historical stock data, stores it in a SQL database, calculates risk and return metrics with SQL window functions, builds an optimised portfolio using Markowitz mean-variance optimisation, and tests whether a Random Forest model can predict future gold returns.
 
-con = sqlite3.connect('stock_portfolio.db') #Connect to sql package. Then create sep file using sqlite3 package under the database file name stock_portfolio
-stockdata.to_sql('Mo_Stk_Prices',con ,if_exists='replace') #Importing stock data to file under the table name Mo_stk_prices. If_exists replaces current file during repeated runs
+## Overview
 
-check=pandas.read_sql_query("Select * from Mo_stk_Prices",con) #Purely for debugging. Just to check whether data is saved.
-print(check) 
+The project takes a small, deliberately diversified basket of assets and asks three questions:
 
-#Now want to calculate monthly percentage change in closing prices to then allow for calculations of potential return
-all_returns = pandas.DataFrame() #Useful later on when performing optimisation. Will help store stock and its equivalent return
+1. **How has each asset performed, and how risky is it?** Cumulative return, annualised volatility, Sharpe ratio and Value-at-Risk (VaR) per asset.
+2. **Can portfolio weights be chosen more intelligently than splitting equally?** Markowitz optimisation finds the maximum Sharpe ratio portfolio and maps the efficient frontier.
+3. **Can past returns predict future returns?** A Random Forest regressor is trained to predict next-month GLD (gold) returns from the previous month's returns across all assets.
 
-for s in stocks: # for loop based on stocks initially chosen.
-    stockclose = f'Close_{s}' #defining variable s and stockclose
-    mp_query = f'''
-        SELECT Date,
-               (("{stockclose}" - LAG("{stockclose}") OVER (ORDER BY Date)) / LAG("{stockclose}") OVER (ORDER BY Date)) * 100 AS "Percentage_{s}_return"
-        FROM Mo_Stk_Prices
-    ''' #SQL query. Exploiting data from Mo_stk_prices table to output date and % return for each stock
-    monthly_returns = pandas.read_sql_query(mp_query, con)
-    monthly_returns=monthly_returns.fillna(0) #Fill NA values within the percentage return with 0
+### Assets analysed
 
-    pound=1
-    cum_return=[] #define a list for the cumulative return
-    for r in monthly_returns[f"Percentage_{s}_return"]: #Creating a for loop to calc return for each stock
-            pound = pound*(1+r/100) 
-            cum_return.append(pound)   #Adding new value to the list using append()     
+| Ticker | Asset | Category |
+|--------|-------|----------|
+| GLD | SPDR Gold Shares | Commodity |
+| CL=F | Crude Oil Futures | Commodity |
+| TSLA | Tesla | Tech / automotive |
+| AMZN | Amazon | Tech |
+| LLOY.L | Lloyds Banking Group | Finance |
+| NG.L | National Grid | Utilities |
 
+Monthly data from January 2020 onwards, downloaded from Yahoo Finance.
 
+## Pipeline
 
-    plt.plot(monthly_returns['Date'] , cum_return, label = s) #plotting date against the cumulate return
-    plt.legend()
+```
+Yahoo Finance (yfinance)
+        │
+        ▼
+SQLite database (Mo_Stk_Prices table)
+        │
+        ▼
+SQL window functions (LAG / OVER) → monthly % returns per asset
+        │
+        ├──► Cumulative return plots
+        ├──► Risk metrics (volatility, Sharpe, VaR)
+        │
+        ▼
+Covariance matrix + mean returns
+        │
+        ├──► Max Sharpe optimisation (SciPy SLSQP)
+        ├──► Efficient frontier (50 target-return points)
+        │
+        ▼
+Backtest: optimised vs equal-weighted portfolio
+        
+Lagged returns ──► Random Forest regression (GLD forecast)
+```
 
-    #Now want to produce risk metrics 
-    #Volatility, Sharpe ratio and Value at Risk - All metrics that can help deciding whether investment into stock is suitable
-    monthly_vol = monthly_returns[f'Percentage_{s}_return'].std() 
-    annual_vol = monthly_vol* np.sqrt(12)  #convert by multiplying monthly volatility with square root of 12    
-    av_ret = monthly_returns[f"Percentage_{s}_return"].mean() / 100   
-    rfr = 0.03977 / 12 #UKs 3 month bill yield. Dividing by 12 to convert to convert into a monthly rate
-    sharpe = (av_ret -rfr)  /(monthly_vol/100)#Calculating the sharpe ratio
-    VaR = np.percentile(monthly_returns[f"Percentage_{s}_return"] , 5) 
+## Methodology
 
-    Metrics = pandas.DataFrame({
-         'Stock name' : [s] ,
-         'Annual volatility' : [annual_vol],
-         'Risk free rate' : [rfr],
-         'Sharpe ratio' : [sharpe] ,
-         'Value at risk' : [VaR]
-    })
+**Data collection and storage.** Monthly closing prices are downloaded with `yfinance`, flattened into single-level column names, and written to a SQLite table using `pandas.to_sql`.
 
-    print(Metrics) #Producing table of calculated parameters
-    
-    if all_returns.empty: #Using an if loop to fill the all_returns variable. 
-        all_returns= monthly_returns
-    else:
-         all_returns = all_returns.merge(monthly_returns, on = 'Date') #If not empty, replace data based on date. Ensures data replaced from exact same point
+**Return calculation in SQL.** Monthly percentage returns are computed directly in SQL using the `LAG()` window function ordered by date, rather than in pandas. Cumulative growth of £1 is then built up from those returns.
 
-con.close()
+**Risk metrics (per asset).**
+- *Annualised volatility*: monthly standard deviation × √12
+- *Sharpe ratio*: (mean monthly return − monthly risk-free rate) / monthly standard deviation, using a UK 3-month bill yield of 3.977% as the risk-free rate
+- *Value-at-Risk*: 5th percentile of monthly returns (historical VaR)
 
-plt.xlabel("Date")
-plt.xticks(rotation = -45 , fontsize=2) #shrinking values on x axis
-plt.ylabel("Return per £")
-plt.title("A plot of Return per pound against date")
+**Markowitz optimisation.** The covariance matrix and mean returns feed a portfolio performance function. `scipy.optimize.minimize` (SLSQP) minimises the negative Sharpe ratio subject to:
+- weights summing to 1
+- long-only weights, each between 0 and 1
 
-#Now looking to perform Markowitz optimisation - i.e Helps to determine the best method of approach to investment in the stock market to produce the greatest return.
-#Found this when looking at ways to actually quantify whether a stock is worth investing into
-#Need sharpe ratio for determined stock proportions
+The efficient frontier is traced by minimising volatility at 50 evenly spaced target returns between the lowest and highest individual asset mean returns.
 
-cov_mtx = all_returns.drop(columns = 'Date') . cov()    #First have to determine covariance matrix. This determines the strength of relationships between stocks  
-print(cov_mtx) #Checking matrix value
+**Machine learning.** A `RandomForestRegressor` predicts GLD's monthly return from the previous month's returns of all six assets. The data is split 80/20 chronologically (`shuffle=False`) to avoid shuffling future data into the training set, and evaluated with MSE and R².
 
-#Now want mean return per stock
-return_columns = [f'Percentage_{s}_return' for s in stocks] #storing returns for each stocks as an array using a nested for loop. 
-mean_stock_return = all_returns[return_columns].mean() #Calculating the mean of return for each value
-print(mean_stock_return)
+**Backtest.** The optimised weights and an equal-weighted baseline are both applied to the full return history and compared as cumulative growth of £1.
 
-#Now using the covariance matrix and the mean, have to determine whether the performance of the new stock portfolio using corresponding values from the 
+## Outputs
 
-def port_performance(weights,mean_stock_return, cov_mtx,rfr): #Defining the function port_performance and the parameters involved
-     portfolio_return = np.sum(weights*mean_stock_return) #Calculating return based on the average return and the weighting
-     portfolio_vol=np.sqrt(np.dot(weights,np.dot(cov_mtx,weights))) #Determining how assets move together and their volatility. NOTE this bit took a very long time so 2x check
-     sharpe = (portfolio_return - rfr)/ (portfolio_vol) #Calculating the sharpe ratio
-     return portfolio_return, portfolio_vol,sharpe #Stores metrics
+- Cumulative return plot for each asset
+- Table of per-asset risk metrics
+- Covariance matrix and mean returns
+- Table of optimal portfolio weights
+- Efficient frontier plot, with the max-Sharpe and equal-weighted portfolios marked
+- Random Forest MSE, R² and an actual-vs-predicted table
+- Backtest plot and final portfolio values for optimised vs equal-weighted
 
-def negative_sharpe(weights, mean_stock_return, cov_mtx, rfr):  #defined a function to return a negative sharpe value
-    portfolio_return,portfolio_vol,sharpe = port_performance(weights, mean_stock_return,cov_mtx,rfr) 
-    return -sharpe #Returning the value of the negative sharpe variable
+## Getting started
 
-def portfolio_volatility(weights, mean_stock_return, cov_mtx): 
-    return np.sqrt(np.dot(weights, np.dot(cov_mtx, weights)))
-                                                                            
-num_stocks = len(stocks) #States how many stocks are within the stock list
-constraint = ({'type':'eq', 'fun' :lambda w:np.sum(w) - 1})#Here i am setting a constraint up. This is ensuring the weights of stocks = 1. Lambda is used to define a small function without using def.
-#type: eq is for an equality constraint. 
+### Requirements
 
-bound = tuple((0,1) for _ in range(num_stocks)) # creating a bound for each stock's weight. Found out I can use _ when using a for loop when i dont have to loop a set num of times. Then will produce bounds for each value in the stock
+- Python 3.9+
+- `pandas`, `numpy`, `matplotlib`, `scipy`, `scikit-learn`, `yfinance`
+- `sqlite3` (included in the Python standard library)
 
-#now want an initial guess for the weightings of each
-#want a list of equal weightings. So 1/(number of stocks)
+```bash
+pip install pandas numpy matplotlib scipy scikit-learn yfinance
+```
 
-first_guess = num_stocks*[1./num_stocks] #Creating a variable for first guess. Producing an equal weights. 
+### Run
 
-result = minimize(negative_sharpe, first_guess, args=(mean_stock_return,cov_mtx,rfr), method ='SLSQP', bounds = bound, constraints=constraint)
-optimal_weights=result.x
+```bash
+python portfolio_analysis.py
+```
 
-opt_table = pandas.DataFrame({ #Produce a table of the optimal weights for each stock 
-     'Stock' :stocks,
-    'Optimal weight' : optimal_weights
-})
-print(opt_table)
+Replace `portfolio_analysis.py` with your script's filename. A `stock_portfolio.db` SQLite file is created in the working directory. Re-running the script replaces the existing table.
 
-target_returns = np.linspace(mean_stock_return.min(), mean_stock_return.max(), 50) #Create 50 evenly spaced numbers between the minimum and maximum values of the mean stock return
-frontier_volatility = [] #creating list for the frontier
+To analyse different assets, edit the `stocks` list at the top of the script.
 
-for target in target_returns: #for loop based on target_returns
-    constraints = (
-        {'type': 'eq', 'fun': lambda w: np.sum(w) - 1}, #First constraint. All weights must equate to 1
-        {'type': 'eq', 'fun': lambda w, target=target: np.sum(w * mean_stock_return) - target} #Second constraint. Expected return = Target considered
-    )
-    result = minimize(portfolio_volatility, first_guess, args=(mean_stock_return, cov_mtx),
-                       method='SLSQP', bounds=bound, constraints=constraints) #Now aiming to minimise the volatility
-    #using optimisation method of SLSQP
-    frontier_volatility.append(result.fun)
+## Limitations and future work
 
-# 3. Plot the frontier, plus your optimal and equal-weighted portfolios
-plt.figure(figsize=(10, 6))
-plt.plot(frontier_volatility, target_returns, label='Efficient Frontier')
+This is a learning project, and these are the known limitations:
 
-opt_return, opt_vol, opt_sharpe = port_performance(optimal_weights, mean_stock_return, cov_mtx, rfr)
-plt.scatter(opt_vol, opt_return, color='red', marker='*', s=200, label='Max Sharpe Portfolio') 
+- **In-sample optimisation and backtest.** Weights are optimised on the same period they are then tested on, so the backtest flatters the optimised portfolio. A stronger approach is a rolling or walk-forward optimisation, or fitting weights on an earlier window and testing on a later one.
+- **Small sample.** Monthly data since 2020 gives roughly 70 observations, which is thin for estimating a six-asset covariance matrix and for training a Random Forest. Expect the ML model to have limited predictive power.
+- **Historical mean returns are noisy inputs.** Max-Sharpe optimisation is sensitive to expected return estimates and tends to produce concentrated portfolios. Constraints, shrinkage estimators or a minimum-variance objective could help.
+- **Currency mixing.** LLOY.L and NG.L are quoted in pence on the London Stock Exchange while the other assets are in US dollars, and no currency conversion is applied. The UK risk-free rate is used across all assets.
+- **Simplifications.** No transaction costs, taxes or rebalancing. The first month's return is filled with 0 as there is no prior price.
+- **ML scope.** No hyperparameter tuning, cross-validation or feature engineering beyond one-month lagged returns. Comparing against a naive baseline (for example predicting the historical mean) would show whether the model adds anything.
 
-equal_weights = np.array(num_stocks * [1. / num_stocks]) #Equal weighting array created using NumPy
-eq_return, eq_vol, eq_sharpe = port_performance(equal_weights, mean_stock_return, cov_mtx, rfr)
-plt.scatter(eq_vol, eq_return, color='blue', marker='o', s=100, label='Equal-Weighted Portfolio') #Producing a point of 
+## Skills demonstrated
 
-plt.xlabel('Volatility (Risk)') #Labelling x and y axis.
-plt.ylabel('Expected Return')
-plt.title('Efficient Frontier') #Title added
-plt.legend()
-
-#Have to create inputs for the machine learning component. Want to predict future returns on GLD using previous stock data
-x = all_returns[[f'Percentage_{s}_return' for s in stocks]].shift(1).dropna() #Now looking to implement ML. Creating the variable x using a for loop. Dropna removes the first row as before, where as shift(1) will move rows down 1.
-y=all_returns[f'Percentage_GLD_return'].iloc[1:] #y is the gold returns column. iloc means y is selecting data from the second row onwards. Trying to determine today's GLD return
-
-x_train,x_test,y_train,y_test = train_test_split(x,y,test_size=0.2 , shuffle=False) #Using a train/test split. Splitting into a split of 20% of data used to test and 80% used to train. Shuffle = False ensures chronological order
-
-
-model=RandomForestRegressor() #Using random forest regression model
-model.fit(x_train,y_train) #Now training the ML model, using input x_train to find output y_train
-
-prediction=model.predict(x_test) #Predicting target values
-mse = mean_squared_error(y_test,prediction)
-r2=r2_score(y_test,prediction)
-
-print(f'Mean squared error is {mse} , R^2 is {r2}') #Printing mean squared error and r^2
-
-comparison = pandas.DataFrame({#Table of test values and predicted outputs
-     'Actual':y_test.values,
-     'Predicted' :prediction
-})
-print(comparison)
-
-#Now want to validate whether optimised portfolio was reasonable
-
-optimised_port_return = sum(all_returns[f'Percentage_{s}_return'] * w for s, w in zip(stocks , optimal_weights))
-optimised_cum_return = [] #create array
-pound=1
-#Same process when calculating return from inital for loop
-for r in optimised_port_return:
-    pound=pound*(1+r/100)
-    optimised_cum_return.append(pound)
-
-equal_port_return = sum(all_returns[f'Percentage_{s}_return']*w for s, w in zip(stocks,equal_weights))
-
-equal_cum_return=[] #creating an array for the cumulative return when equal weights are used
-pound=1
-for r in equal_port_return:
-    pound=pound*(1+r/100) 
-    equal_cum_return.append(pound)
-
-plt.figure(figsize=(10, 6))
-
-
-plt.plot(all_returns['Date'], optimised_cum_return, label='Optimised Portfolio')  #Now plotting returns. Here using the calculated optimised weights
-plt.plot(all_returns['Date'], equal_cum_return, label='Equally-Weighted Portfolio') #Plotting return when equal weightings are applied
-plt.xticks(rotation = -45 , fontsize=2) #shrinking values on x axis
-plt.xlabel('Date')
-plt.ylabel('Return per £')
-plt.title('Backtest: Optimised vs Equal-Weighted Portfolio')
-plt.legend()
-plt.show()
-
-print(f"Optimised portfolio final value: £{optimised_cum_return[-1]:.2f}") #Printing calculated parameters. Outputting to 2 dp
-print(f"Equal-weighted portfolio final value: £{equal_cum_return[-1]:.2f}") 
-print(f"Optimised — Return: {opt_return:.2f}%, Volatility: {opt_vol:.2f}%, Sharpe: {opt_sharpe:.2f}")
-print(f"Equal-weighted — Return: {eq_return:.2f}%, Volatility: {eq_vol:.2f}%, Sharpe: {eq_sharpe:.2f}") 
+Python · SQL (window functions) · pandas · NumPy · SciPy optimisation · scikit-learn · financial risk metrics · data visualisation
