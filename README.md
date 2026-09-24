@@ -80,6 +80,44 @@ The efficient frontier is traced by minimising volatility at 50 evenly spaced ta
 - Random Forest MSE, R² and an actual-vs-predicted table
 - Backtest plot and final portfolio values for optimised vs equal-weighted
 
+## Results
+
+Based on 81 monthly observations (January 2020 – September 2026).
+
+### Per-asset risk and return
+
+| Asset | Mean monthly return | Annualised volatility | Sharpe (monthly) | 5% VaR (monthly) |
+|-------|--------------------:|----------------------:|-----------------:|-----------------:|
+| GLD | 1.32% | 16.9% | 0.20 | -5.4% |
+| CL=F | 1.55% | 43.9% | 0.10 | -13.2% |
+| TSLA | 4.46% | 68.3% | 0.21 | -21.6% |
+| LLOY.L | 1.19% | 30.4% | 0.10 | -10.0% |
+| AMZN | 1.56% | 32.9% | 0.13 | -11.6% |
+| NG.L | 0.30% | 18.3% | -0.01 | -8.9% |
+
+Gold and Tesla had almost the same Sharpe ratio, but gold achieved it with roughly a quarter of the volatility and a far shallower worst-case month.
+
+### Optimised vs equal-weighted portfolio
+
+Max-Sharpe weights: GLD 62.2%, LLOY.L 12.2%, TSLA 11.4%, CL=F 10.7%, AMZN 3.5%, NG.L 0%.
+
+| | Optimised | Equal-weighted |
+|---|---:|---:|
+| Mean monthly return | 1.69% | 1.73% |
+| Monthly volatility | 4.57% | 5.56% |
+| Sharpe ratio (monthly) | 0.37 | 0.31 |
+| Final value of £1 invested (Jan 2020) | £3.59 | £3.56 |
+
+The optimiser's benefit was lower risk rather than higher return: about 18% less volatility for a near-identical mean return and almost identical final value. It concentrated in gold, which was weakly correlated with most of the other assets, and gave National Grid no weight (lowest mean return, Sharpe near zero). Because the weights are fitted and tested on the same period, this describes the historical data rather than showing out-of-sample outperformance.
+
+### Random Forest (GLD next-month return)
+
+- Test set: 16 months (chronological 80/20 split)
+- MSE: 43.9
+- R²: 0.07
+
+Predictions stayed within a narrow band (about -0.2% to 4.4%) while actual returns ranged from about -11.7% to +12.3%, so the model does not capture the large monthly moves. With 16 test points and an R² this close to zero, there is no evidence of useful predictive power from lagged returns alone.
+
 ## Getting started
 
 ### Requirements
@@ -111,7 +149,8 @@ This is a learning project, and these are the known limitations:
 - **Historical mean returns are noisy inputs.** Max-Sharpe optimisation is sensitive to expected return estimates and tends to produce concentrated portfolios. Constraints, shrinkage estimators or a minimum-variance objective could help.
 - **Currency mixing.** LLOY.L and NG.L are quoted in pence on the London Stock Exchange while the other assets are in US dollars, and no currency conversion is applied. The UK risk-free rate is used across all assets.
 - **Simplifications.** No transaction costs, taxes or rebalancing. The first month's return is filled with 0 as there is no prior price.
-- **ML scope.** No hyperparameter tuning, cross-validation or feature engineering beyond one-month lagged returns. Comparing against a naive baseline (for example predicting the historical mean) would show whether the model adds anything.
+- **ML scope.** No hyperparameter tuning, cross-validation or feature engineering beyond one-month lagged returns, and no random seed is set, so R² varies slightly between runs. Comparing against a naive baseline (for example predicting the training-set mean) would show whether the model adds anything.
+- **Incomplete final month.** Monthly data from Yahoo Finance includes the current, unfinished month as its last row.
 
 ## Skills demonstrated
 
